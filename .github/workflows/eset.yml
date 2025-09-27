@@ -54,7 +54,7 @@ jobs:
           MAIL=${{ github.event.inputs.mail }}
           KEY_TYPE=${{ github.event.inputs.key_type }}
 
-          git clone https://github.com/rzc0d3r/ESET-KeyGen.git
+          git clone https://github.com/egorv2/ESET-KeyGen.git
           cd ESET-KeyGen
           
           # Setup env
@@ -91,7 +91,7 @@ jobs:
           MAIL=${{ github.event.inputs.mail }}
           KEY_TYPE=${{ github.event.inputs.key_type }}
 
-          git clone https://github.com/rzc0d3r/ESET-KeyGen.git
+          git clone https://github.com/egorv2/ESET-KeyGen.git
           cd ESET-KeyGen
           
           # Setup env
@@ -127,7 +127,7 @@ jobs:
           $MAIL="${{ github.event.inputs.mail }}"
           $KEY_TYPE="${{ github.event.inputs.key_type }}"
 
-          git clone https://github.com/rzc0d3r/ESET-KeyGen.git
+          git clone https://github.com/egorv2/ESET-KeyGen.git
           cd ESET-KeyGen
 
           # Setup dependencies
