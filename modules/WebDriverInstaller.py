@@ -1,10 +1,12 @@
 GOOGLE_CHROME = 'Google Chrome'
 MICROSOFT_EDGE = 'Microsoft Edge'
 MOZILLA_FIREFOX = 'Mozilla Firefox'
+APPLE_SAFARI = 'Apple Safari'
 
 GOOGLE_CHROME_RE = r'(\d+\.\d+\.\d+\.\d+)'
 MICROSOFT_EDGE_RE = r'(\d+\.\d+\.\d+\.\d+)'
 MOZILLA_FIREFOX_RE = r'(\d+\.\d+\.\d+)|(\d+\.\d+)'
+APPLE_SAFARI_RE = r'\d+.\d+.\d+'
 
 from .SharedTools import console_log, INFO, OK, ERROR, WARN
 from .ProgressBar import ProgressBar, DEFAULT_RICH_STYLE
@@ -17,6 +19,7 @@ init()
 import subprocess
 import platform
 import requests
+import logging
 import zipfile
 import tarfile
 import shutil
@@ -24,12 +27,15 @@ import sys
 import re
 import os
 
+SILENT_MODE = '--silent' in sys.argv
+
 class WebDriverInstaller(object):
     def __init__(self, browser_name: str, custom_browser_location=None):
         self.browsers_data = {
             GOOGLE_CHROME: [self.get_chromedriver_url, 'chromedriver.exe' if sys.platform.startswith('win') else 'chromedriver', self.get_chrome_version, GOOGLE_CHROME_RE],
             MICROSOFT_EDGE: [self.get_msedgedriver_url, 'msedgedriver.exe' if sys.platform.startswith('win') else 'msedgedriver', self.get_edge_version, MICROSOFT_EDGE_RE],
-            MOZILLA_FIREFOX: [self.get_geckodriver_url, 'geckodriver.exe' if  sys.platform.startswith('win') else 'geckodriver', self.get_firefox_version, MOZILLA_FIREFOX_RE]
+            MOZILLA_FIREFOX: [self.get_geckodriver_url, 'geckodriver.exe' if  sys.platform.startswith('win') else 'geckodriver', self.get_firefox_version, MOZILLA_FIREFOX_RE],
+            APPLE_SAFARI: []
         }
         self.browser_name = browser_name
         self.custom_browser_location = custom_browser_location
@@ -121,10 +127,10 @@ class WebDriverInstaller(object):
                         if driver_url['platform'] in self.platform[1]:
                             return driver_url['url']
         else: # for old drivers ( [..., 115.0.0000.0) )
-            latest_old_driver_version = requests.get('https://chromedriver.storage.googleapis.com/LATEST_RELEASE_{0}'.format(chrome_major_version))
+            latest_old_driver_version = requests.get(f'https://chromedriver.storage.googleapis.com/LATEST_RELEASE_{chrome_major_version}')
             if latest_old_driver_version.status_code == 200:
                 latest_old_driver_version = latest_old_driver_version.text
-                driver_url = 'https://chromedriver.storage.googleapis.com/{0}/chromedriver_'.format(latest_old_driver_version)
+                driver_url = f'https://chromedriver.storage.googleapis.com/{latest_old_driver_version}/chromedriver_'
                 for arch in self.platform[1]:
                     current_driver_url = driver_url+arch+'.zip'
                     driver_size = requests.head(current_driver_url).headers.get('x-goog-stored-content-length', None)
@@ -174,15 +180,15 @@ class WebDriverInstaller(object):
             edge_version, _ = self.get_edge_version()
         major_version = edge_version.split('.')[0]
         if self.platform[0] == 'win':
-            r = requests.get(f'https://msedgedriver.azureedge.net/LATEST_RELEASE_{major_version}_WINDOWS')
+            r = requests.get(f'https://msedgedriver.microsoft.com/LATEST_RELEASE_{major_version}_WINDOWS')
         elif self.platform[0] == 'linux':
-            r = requests.get(f'https://msedgedriver.azureedge.net/LATEST_RELEASE_{major_version}_LINUX')
+            r = requests.get(f'https://msedgedriver.microsoft.com/LATEST_RELEASE_{major_version}_LINUX')
         elif self.platform[0] == 'mac':
-            r = requests.get(f'https://msedgedriver.azureedge.net/LATEST_RELEASE_{major_version}_MACOS')
+            r = requests.get(f'https://msedgedriver.microsoft.com/LATEST_RELEASE_{major_version}_MACOS')
         if r.status_code == 200:
             webdriver_version = r.text.strip()
             for arch in archs:
-                driver_url = f'https://msedgedriver.azureedge.net/{webdriver_version}/edgedriver_{arch}.zip'
+                driver_url = f'https://msedgedriver.microsoft.com/{webdriver_version}/edgedriver_{arch}.zip'
                 driver_size = requests.head(driver_url).headers.get('Content-Length', None)
                 if driver_size is not None and int(driver_size) > 1024**2:
                     return driver_url
@@ -256,7 +262,27 @@ class WebDriverInstaller(object):
                 r = requests.get(url, stream=True)
                 if int(r.headers.get('Content-Length', 0)) > 1024**2:
                     return url
-                
+    
+    def get_safari_version(self):
+        if self.platform[0] == "mac":
+            cmd = ['/usr/libexec/PlistBuddy', '-c', "print :CFBundleShortVersionString", '/Applications/Safari.app/Contents/Info.plist']
+            try:
+                with subprocess.Popen(cmd, stdout=subprocess.PIPE) as proc:
+                    return re.search(APPLE_SAFARI_RE, proc.communicate()[0].decode("utf-8")).group()
+            except:
+                pass
+
+    def detect_installed_browser(self):
+        for browser_name in self.browsers_data:
+            if browser_name == APPLE_SAFARI:
+                browser_version = self.get_safari_version()
+                if browser_version is not None:
+                    return [APPLE_SAFARI, browser_version]
+            else:
+                browser_version, browser_path = self.browsers_data[browser_name][2]()
+                if browser_version is not None:
+                    return [browser_name, browser_version, browser_path]
+    
     def download_webdriver(self, url=None, path='.', disable_progress_bar=False):
         # init
         webdriver_name = self.browser_data[1]
@@ -275,7 +301,7 @@ class WebDriverInstaller(object):
             total_length = int(response.headers.get('content-length', total_length))
         else:
             total_length = 0
-        if total_length == 0: # No content length header
+        if total_length == 0 or SILENT_MODE: # No content length header
             with open(archive_path, 'wb') as f:
                 f.write(response.content)
         else:
@@ -322,16 +348,22 @@ class WebDriverInstaller(object):
         def download():
             driver_url = self.browser_data[0]()
             if driver_url is not None:
-                console_log('\nFound a suitable version for your system!', OK)
-                console_log('Downloading...', INFO)
+                logging.info('Found a suitable version for your system!')
+                logging.info('Downloading...')
+                console_log('\nFound a suitable version for your system!', OK, silent_mode=SILENT_MODE)
+                console_log('Downloading...', INFO, silent_mode=SILENT_MODE)
                 if self.download_webdriver(driver_url, disable_progress_bar=disable_progress_bar):
-                    console_log('{0} webdriver was successfully downloaded and unzipped!\n'.format(self.browser_name), OK)
+                    logging.info(f'{self.browser_name} webdriver was successfully downloaded and unzipped!')
+                    console_log(f'{self.browser_name} webdriver was successfully downloaded and unzipped!\n', OK, silent_mode=SILENT_MODE)
                     return os.path.join(os.getcwd(), webdriver_name)
                 else:
-                    console_log('Error downloading or unpacking!\n', ERROR)
+                    logging.info('Error downloading or unpacking!')
+                    console_log('Error downloading or unpacking!\n', ERROR, silent_mode=SILENT_MODE)
             else:
-                console_log('\nA suitable version for your system was not found!\n', ERROR)
-        console_log(f'{Fore.LIGHTMAGENTA_EX}-- WebDriver Auto-Installer --{Fore.RESET}\n')
+                logging.info('A suitable version for your system was not found!')
+                console_log('\nA suitable version for your system was not found!\n', ERROR, silent_mode=SILENT_MODE)
+        logging.info('-- WebDriver Auto-Installer --')
+        console_log(f'{Fore.LIGHTMAGENTA_EX}-- WebDriver Auto-Installer --{Fore.RESET}\n', silent_mode=SILENT_MODE)
         browser_version, browser_path = self.browser_data[2]()
         if browser_version is None:
             if self.custom_browser_location is None or self.custom_browser_location == '':
@@ -349,22 +381,28 @@ class WebDriverInstaller(object):
                     webdriver_path = os.path.join(os.getcwd(), webdriver_name)
             except:
                 pass
-        console_log('{0} version: {1}'.format(self.browser_name, browser_version), INFO, False)
-        console_log('{0} webdriver version: {1}'.format(self.browser_name, current_webdriver_version), INFO, False)
+        logging.info(f'{self.browser_name} version: {browser_version}')
+        logging.info(f'{self.browser_name} webdriver version: {current_webdriver_version}')
+        console_log(f'{self.browser_name} version: {browser_version}', INFO, False, SILENT_MODE)
+        console_log(f'{self.browser_name} webdriver version: {current_webdriver_version}', INFO, False, SILENT_MODE)
         if self.browser_name == MOZILLA_FIREFOX:
             latest_geckodriver_version = self.browser_data[0](True)
             if current_webdriver_version == latest_geckodriver_version:
-                console_log('The webdriver has already been updated to the latest version!\n', OK)
+                logging.info('The webdriver has already been updated to the latest version!')
+                console_log('The webdriver has already been updated to the latest version!\n', OK, silent_mode=SILENT_MODE)
                 webdriver_path = os.path.join(os.getcwd(), webdriver_name)
             else:
-                console_log(f'Updating the webdriver from {current_webdriver_version} to {latest_geckodriver_version} version...', INFO)
+                logging.info(f'Updating the webdriver from {current_webdriver_version} to {latest_geckodriver_version} version...')
+                console_log(f'Updating the webdriver from {current_webdriver_version} to {latest_geckodriver_version} version...', INFO, silent_mode=SILENT_MODE)
                 webdriver_path = download()
         else:
             if current_webdriver_version is None or (current_webdriver_version.split('.')[0] != browser_version.split('.')[0]): # major version match
-                console_log('{0} webdriver version doesn\'t match version of the installed {1}, trying to download...'.format(self.browser_name, self.browser_name), WARN, True)
+                logging.warning(f'{self.browser_name} webdriver version doesn\'t match version of the installed {self.browser_name}, trying to download...')
+                console_log(f'{self.browser_name} webdriver version doesn\'t match version of the installed {self.browser_name}, trying to download...', WARN, True, SILENT_MODE)
                 webdriver_path = download()
             else:
-                console_log('The webdriver has already been updated to the browser version!\n', OK)
+                logging.info('The webdriver has already been updated to the browser version!')
+                console_log('The webdriver has already been updated to the browser version!\n', OK, silent_mode=SILENT_MODE)
         try:
             os.chmod(webdriver_path, 0o755)
         except:
